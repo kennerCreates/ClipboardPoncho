@@ -16,6 +16,7 @@ var unit_data: UnitDataSystem
 var unit_render: UnitRenderSystem
 var movement: MovementSystem
 var spatial_grid: SpatialGrid
+var pathfinding: PathfindingSystem
 
 # Unit tracking by player
 var units_by_player: Dictionary = {}  # player_id -> Array[int] (unit indices)
@@ -39,9 +40,12 @@ func _ready() -> void:
 	spatial_grid = SpatialGrid.new()
 	add_child(spatial_grid)
 
+	pathfinding = PathfindingSystem.new()
+	add_child(pathfinding)
+
 	movement = MovementSystem.new()
 	add_child(movement)
-	movement.initialize(unit_data, spatial_grid)
+	movement.initialize(unit_data, spatial_grid, pathfinding)
 
 	# Initialize player tracking
 	units_by_player[0] = []  # Player 1

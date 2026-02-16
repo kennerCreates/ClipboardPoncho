@@ -59,6 +59,9 @@ var selection_flags: PackedInt32Array = []  # Bitfield: bit 0 = selected, bit 1 
 # Worker-specific data (only relevant for worker units)
 var carried_resources: PackedInt32Array = []  # Amount of resources being carried
 
+# Test movement data (for random wandering behavior)
+var next_move_times: PackedFloat32Array = []  # Time when unit should pick new random destination
+
 # Unit capacity
 var unit_count: int = 0
 const MAX_CAPACITY: int = 1000
@@ -84,6 +87,7 @@ func _initialize_arrays() -> void:
 	target_resource_ids.resize(MAX_CAPACITY)
 	selection_flags.resize(MAX_CAPACITY)
 	carried_resources.resize(MAX_CAPACITY)
+	next_move_times.resize(MAX_CAPACITY)
 
 	# Initialize all to default values
 	for i in range(MAX_CAPACITY):
@@ -100,6 +104,7 @@ func _initialize_arrays() -> void:
 		target_resource_ids[i] = -1
 		selection_flags[i] = 0
 		carried_resources[i] = 0
+		next_move_times[i] = 0.0
 
 ## Spawns a new unit and returns its index
 func spawn_unit(player_id: int, unit_type: UnitType, spawn_pos: Vector3) -> int:

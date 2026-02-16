@@ -22,9 +22,9 @@ var simulation_speed: float = 1.0
 
 # Test movement settings
 var test_movement_enabled: bool = true
-var movement_area_size: float = 30.0  # All units move within shared 30x30 area at origin
-var move_interval: float = 3.0  # Give new random targets every 3 seconds
-var time_since_last_move: float = 0.0
+var movement_area_size: float = 150.0  # All units move within shared 150x150 area at origin
+var move_interval_min: float = 2.0  # Minimum time between moves (seconds)
+var move_interval_max: float = 5.0  # Maximum time between moves (seconds)
 
 func _ready() -> void:
 	# Find camera in scene
@@ -53,13 +53,17 @@ func _initialize_managers() -> void:
 	debug_overlay.name = "DebugOverlay"
 	get_tree().root.add_child.call_deferred(debug_overlay)
 
+	# Pass unit manager reference to debug overlay for unit stats
+	debug_overlay.set_unit_manager(unit_manager)
+
 	# Spawn some test units
 	_spawn_test_units()
 
 func _spawn_test_units() -> void:
-	# Spawn a grid of test units to verify the system works
-	var grid_size = 10
-	var spacing = 3.0
+	# Spawn a grid of test units to test performance and frustum culling
+	# 32x32 = 1024 units (close to 1000)
+	var grid_size = 32
+	var spacing = 5.0
 
 	for x in range(grid_size):
 		for z in range(grid_size):
@@ -88,13 +92,13 @@ func _update_game_systems(delta: float) -> void:
 	if test_movement_enabled and unit_manager:
 		_update_test_movement(delta)
 
-	# Debug output
-	if Engine.get_frames_drawn() % 60 == 0:  # Every second
-		if unit_manager:
-			print("Total units: %d, Visible: %d" % [
-				unit_manager.get_total_unit_count(),
-				unit_manager.get_visible_unit_count()
-			])
+	# Debug output (disabled - use F3 overlay instead)
+	# if Engine.get_frames_drawn() % 60 == 0:  # Every second
+	# 	if unit_manager:
+	# 		print("Total units: %d, Visible: %d" % [
+	# 			unit_manager.get_total_unit_count(),
+	# 			unit_manager.get_visible_unit_count()
+	# 		])
 
 func start_game() -> void:
 	current_state = GameState.PLAYING
@@ -106,21 +110,18 @@ func resume_game() -> void:
 	current_state = GameState.PLAYING
 
 ## Test behavior: Give units random movement targets
-func _update_test_movement(delta: float) -> void:
-	time_since_last_move += delta
+## Each unit has its own timer for when to pick a new destination
+func _update_test_movement(_delta: float) -> void:
+	var unit_data = unit_manager.unit_data
+	var half_size = movement_area_size / 2.0
+	var current_time = Time.get_ticks_msec() / 1000.0  # Convert to seconds
 
-	# Every move_interval seconds, give all units new random targets
-	if time_since_last_move >= move_interval:
-		time_since_last_move = 0.0
+	for i in range(unit_data.unit_count):
+		if not unit_data.is_alive(i):
+			continue
 
-		# Get all alive units and give them random targets
-		var unit_data = unit_manager.unit_data
-		var half_size = movement_area_size / 2.0
-
-		for i in range(unit_data.unit_count):
-			if not unit_data.is_alive(i):
-				continue
-
+		# Check if it's time for this unit to pick a new destination
+		if current_time >= unit_data.next_move_times[i]:
 			# Random position within the movement area (centered at origin)
 			var random_target = Vector3(
 				randf_range(-half_size, half_size),
@@ -130,3 +131,7 @@ func _update_test_movement(delta: float) -> void:
 
 			# Command unit to move
 			unit_manager.movement.command_move(i, random_target)
+
+			# Set next move time with random interval (2-5 seconds from now)
+			var next_interval = randf_range(move_interval_min, move_interval_max)
+			unit_data.next_move_times[i] = current_time + next_interval

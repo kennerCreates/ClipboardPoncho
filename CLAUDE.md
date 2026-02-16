@@ -61,32 +61,36 @@ The game uses specialized systems coordinated by `GameManager`:
 
 3. **MovementSystem** (`scripts/systems/movement_system.gd`) - **NEW!**
    - Updates unit positions and velocities
+   - Uses flow fields for pathfinding when available
    - Collision avoidance using spatial grid
+   - **Staggered updates**: Only 25% of units update per frame
    - Simplified updates for off-screen units
-   - Steering behaviors (separation, arrival)
+   - Steering behaviors (separation, arrival, velocity prediction)
 
-4. **SpatialGrid** (`scripts/utils/spatial_grid.gd`) - **NEW!**
+4. **PathfindingSystem** (`scripts/systems/pathfinding_system.gd`) - **NEW!**
+   - Flow field pathfinding for efficient group movement
+   - Caches up to 10 active flow fields (5-second expiration)
+   - Multiple units targeting same area share one flow field
+   - Grid: 128×128 cells (256×256 meter coverage)
+   - Distance-corrected costs (cardinal=1.0, diagonal=1.414)
+
+5. **SpatialGrid** (`scripts/utils/spatial_grid.gd`) - **NEW!**
    - Grid-based spatial hashing for fast queries
    - O(1) insertion, O(k) queries where k = nearby units
    - Essential for collision avoidance with 1000 units
    - Example: Instead of checking 1000 units, only check ~20-30 nearby
 
-5. **UnitManager** (`scripts/systems/unit_manager.gd`) - **UPDATED!**
-   - Coordinates all unit systems
+6. **UnitManager** (`scripts/systems/unit_manager.gd`) - **UPDATED!**
+   - Coordinates all unit systems (data, render, movement, pathfinding)
    - Maintains signal compatibility with existing code
    - Returns unit indices instead of Node3D references
    - Provides high-level commands (spawn, move, attack)
 
-6. **ResourceManager** (`scripts/systems/resource_manager.gd`)
+7. **ResourceManager** (`scripts/systems/resource_manager.gd`)
    - Manages player resources (minerals, vespene, supply)
    - Tracks worker assignments to resource nodes
    - Validates affordability for purchases
    - Signal-based: `resources_changed`, `supply_changed`
-
-7. **PathfindingManager** (TODO - Coming Soon)
-   - Flow field pathfinding for large unit groups
-   - Centralized pathfinding to avoid duplicate calculations
-   - Local collision avoidance (already implemented in MovementSystem)
 
 8. **AIManager** (TODO)
    - AI opponent decision making
@@ -163,6 +167,22 @@ for unit_idx in nearby:
     check_collision(unit_idx)
 ```
 
+**Flow Fields:**
+```gdscript
+# Efficient pathfinding for groups - calculate once, benefit many units
+class FlowField:
+    var cost_field: PackedFloat32Array  # Distance to goal at each cell
+    var flow_vectors: PackedVector2Array  # Direction to move at each cell
+    var grid_size: Vector2i  # 128×128 cells
+    var cell_size: float = 2.0  # 2 meters per cell
+
+# Get flow direction for unit
+var flow_direction = pathfinding.get_flow_direction(unit_pos, target_pos)
+
+# Multiple units targeting same area automatically share the flow field
+# Flow fields expire after 5 seconds, then regenerate if still needed
+```
+
 **Building Architecture** (TODO - still using traditional nodes for now):
 ```
 Building (Node3D)
@@ -237,10 +257,11 @@ if ResourceManager.can_afford(player_id, marine_cost):
 - Angled at ~45° looking down
 - Position: High above battlefield
 
-**Pathfinding: Flow Fields (Recommended)**
+**Pathfinding: Flow Fields (IMPLEMENTED)**
 - Traditional A* doesn't scale well for 100+ units moving together
 - Flow fields compute once, benefit many units
-- Consider Godot Navigation Server or custom implementation
+- Custom implementation using breadth-first search with distance-corrected costs
+- Provides StarCraft 2-style fluid group movement
 
 ## File Naming Conventions
 

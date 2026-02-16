@@ -6,9 +6,10 @@ class_name MovementSystem
 ## to avoid collisions with nearby units (using spatial grid).
 
 # Collision avoidance settings
-const AVOIDANCE_RADIUS: float = 3.0  # How close before units try to avoid each other
-const AVOIDANCE_STRENGTH: float = 15.0  # How strongly units push away from each other
-const SEPARATION_DISTANCE: float = 2.0  # Preferred distance between units (units are 1m wide)
+const AVOIDANCE_RADIUS: float = 2.5  # How close before units try to avoid each other
+const AVOIDANCE_STRENGTH: float = 20.0  # How strongly units push away from each other
+const SEPARATION_DISTANCE: float = 1.8  # Preferred distance between units (units are 1m wide)
+const MAX_AVOIDANCE_NEIGHBORS: int = 4  # Only avoid N closest units (reduced for performance)
 
 # Movement smoothing
 const MAX_STEERING_FORCE: float = 20.0  # Maximum steering force per frame
@@ -17,13 +18,21 @@ const ARRIVAL_THRESHOLD: float = 0.5  # Distance at which unit "arrives" at targ
 # References
 var unit_data: UnitDataSystem
 var spatial_grid: SpatialGrid
+var pathfinding: PathfindingSystem
 
-func initialize(data: UnitDataSystem, grid: SpatialGrid) -> void:
+# Staggered update optimization
+var frame_counter: int = 0
+const UPDATE_BUCKETS_VISIBLE: int = 2  # Update 50% of visible units per frame (smoother)
+const UPDATE_BUCKETS_HIDDEN: int = 10  # Update 10% of off-screen units per frame (more aggressive)
+
+func initialize(data: UnitDataSystem, grid: SpatialGrid, pathfinding_system: PathfindingSystem = null) -> void:
 	unit_data = data
 	spatial_grid = grid
+	pathfinding = pathfinding_system
 
 ## Update all units - apply movement and steering
-func update(delta: float, _camera_frustum: Array[Plane]) -> void:
+## Uses staggered updates: only 25% of units updated per frame
+func update(delta: float, camera_frustum: Array[Plane]) -> void:
 	if not unit_data or not spatial_grid:
 		return
 
@@ -33,21 +42,26 @@ func update(delta: float, _camera_frustum: Array[Plane]) -> void:
 		if unit_data.is_alive(i):
 			spatial_grid.insert(i, unit_data.positions[i])
 
-	# Update each unit
+	# Increment frame counter for staggered updates
+	frame_counter += 1
+
+	# Update each unit with different rates for visible vs off-screen
 	for i in range(unit_data.unit_count):
 		if not unit_data.is_alive(i):
 			continue
 
-		# TEMPORARILY DISABLED: Apply full updates to all units for testing
-		# Once frustum culling is properly tuned, we can re-enable this optimization
-		#var is_visible = _is_in_frustum(camera_frustum, unit_data.positions[i])
-		#if is_visible:
-		#	_update_unit_full(i, delta)
-		#else:
-		#	_update_unit_simple(i, delta)
+		# Check if unit is visible
+		var is_visible = _is_in_frustum(camera_frustum, unit_data.positions[i])
 
-		# For now: all units get full collision avoidance
-		_update_unit_full(i, delta)
+		# Staggered updates: visible units update more frequently (smoother)
+		if is_visible:
+			# Visible units: 50% per frame (every 2 frames)
+			if i % UPDATE_BUCKETS_VISIBLE == frame_counter % UPDATE_BUCKETS_VISIBLE:
+				_update_unit_full(i, delta * UPDATE_BUCKETS_VISIBLE)
+		else:
+			# Off-screen units: 10% per frame (every 10 frames)
+			if i % UPDATE_BUCKETS_HIDDEN == frame_counter % UPDATE_BUCKETS_HIDDEN:
+				_update_unit_simple(i, delta * UPDATE_BUCKETS_HIDDEN)
 
 ## Full update for on-screen units (collision avoidance, smooth movement)
 func _update_unit_full(unit_idx: int, delta: float) -> void:
@@ -72,9 +86,15 @@ func _update_unit_full(unit_idx: int, delta: float) -> void:
 		unit_data.velocities[unit_idx] = Vector3.ZERO
 		return
 
-	# Calculate desired velocity
+	# Calculate desired velocity using direct path (flow fields temporarily disabled)
 	var speed = unit_data.get_unit_speed(unit_idx)
 	var desired_velocity = to_target.normalized() * speed
+
+	# TODO: Re-enable flow fields after performance testing
+	# if pathfinding and pathfinding.is_in_bounds(pos):
+	# 	var flow_direction = pathfinding.get_flow_direction(pos, target)
+	# 	if flow_direction.length_squared() > 0.01:
+	# 		desired_velocity = flow_direction.normalized() * speed
 
 	# Apply collision avoidance
 	var avoidance_force = _calculate_avoidance(unit_idx, pos)
@@ -134,28 +154,51 @@ func _update_unit_simple(unit_idx: int, delta: float) -> void:
 	spatial_grid.update_position(unit_idx, old_pos, pos)
 
 ## Calculate collision avoidance force using spatial grid
+## Improved: velocity prediction + limited neighbors for performance
 func _calculate_avoidance(unit_idx: int, pos: Vector3) -> Vector3:
 	var avoidance = Vector3.ZERO
+	var velocity = unit_data.velocities[unit_idx]
 
-	# Query nearby units using spatial grid (much faster than checking all units)
+	# Query nearby units using spatial grid
 	var nearby = spatial_grid.query_radius(pos, AVOIDANCE_RADIUS)
 
+	# Build list of neighbors with distances for sorting
+	var neighbors = []
 	for other_idx in nearby:
-		if other_idx == unit_idx:
-			continue
-
-		if not unit_data.is_alive(other_idx):
+		if other_idx == unit_idx or not unit_data.is_alive(other_idx):
 			continue
 
 		var other_pos = unit_data.positions[other_idx]
-		var to_other = other_pos - pos
-		var distance = to_other.length()
+		var distance = pos.distance_to(other_pos)
 
-		# Apply separation force if too close
 		if distance < SEPARATION_DISTANCE and distance > 0.01:
-			# Push away from other unit
-			var push_force = (pos - other_pos).normalized() / distance
-			avoidance += push_force * AVOIDANCE_STRENGTH
+			neighbors.append({"idx": other_idx, "pos": other_pos, "distance": distance})
+
+	# Sort by distance and limit to closest N neighbors
+	neighbors.sort_custom(func(a, b): return a.distance < b.distance)
+	var max_neighbors = min(neighbors.size(), MAX_AVOIDANCE_NEIGHBORS)
+
+	# Apply avoidance from closest neighbors only
+	for i in range(max_neighbors):
+		var neighbor = neighbors[i]
+		var other_pos = neighbor.pos
+		var distance = neighbor.distance
+
+		# Velocity prediction: predict where units will be in 0.5 seconds
+		var other_velocity = unit_data.velocities[neighbor.idx]
+		var predicted_pos = pos + velocity * 0.5
+		var predicted_other_pos = other_pos + other_velocity * 0.5
+		var predicted_distance = predicted_pos.distance_to(predicted_other_pos)
+
+		# Use predicted distance if closer (units moving toward each other)
+		var effective_distance = min(distance, predicted_distance)
+
+		# Stronger force when very close (prevents overlap)
+		var distance_factor = 1.0 / max(effective_distance, 0.1)
+
+		# Push away from other unit
+		var push_direction = (pos - other_pos).normalized()
+		avoidance += push_direction * AVOIDANCE_STRENGTH * distance_factor
 
 	return avoidance
 
@@ -174,7 +217,10 @@ func command_move_group(unit_indices: Array[int], target_pos: Vector3) -> void:
 
 ## Check if position is in frustum
 func _is_in_frustum(frustum_planes: Array[Plane], pos: Vector3) -> bool:
+	# In Godot, frustum plane normals point INWARD
+	# Positive distance = outside frustum, Negative distance = inside frustum
 	for plane in frustum_planes:
-		if plane.distance_to(pos) < -2.0:
+		# If distance is positive (outside), reject the point
+		if plane.distance_to(pos) > 2.0:
 			return false
 	return true

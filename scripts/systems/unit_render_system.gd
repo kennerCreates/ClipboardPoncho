@@ -83,10 +83,22 @@ func update(camera: Camera3D) -> void:
 	# Get camera frustum for culling
 	var frustum_planes = camera.get_frustum()
 
-	# DEBUG: Print camera info once
+	# DEBUG: Print camera and frustum info once
 	if Engine.get_frames_drawn() == 60:
+		print("\n=== FRUSTUM CULLING DEBUG ===")
 		print("Camera pos: ", camera.global_position)
+		print("Camera rotation: ", camera.rotation_degrees)
 		print("Frustum planes: ", frustum_planes.size())
+
+		# Test a known unit position
+		if unit_data.unit_count > 0:
+			var test_pos = unit_data.positions[0]
+			print("Test unit pos: ", test_pos)
+			print("Test unit in frustum: ", _is_in_frustum(frustum_planes, test_pos))
+			for i in range(frustum_planes.size()):
+				var dist = frustum_planes[i].distance_to(test_pos)
+				print("  Plane %d distance: %.2f (normal: %s)" % [i, dist, frustum_planes[i].normal])
+		print("=============================\n")
 
 	# Reset all mappings
 	for unit_type in multimeshes.keys():
@@ -96,31 +108,25 @@ func update(camera: Camera3D) -> void:
 		mapping.active_count = 0
 
 	# Process each unit
-	var units_checked = 0
-	var units_in_frustum = 0
 	for i in range(unit_data.unit_count):
 		# Skip dead units
 		if unit_data.states[i] == UnitDataSystem.UnitState.DEAD:
 			continue
 
-		units_checked += 1
 		var pos = unit_data.positions[i]
 
 		# FRUSTUM CULLING - Skip off-screen units entirely
 		# This is the KEY optimization for isometric camera
-		# TEMPORARILY DISABLED for testing
-		#if not _is_in_frustum(frustum_planes, pos):
-		#	continue
-
-		units_in_frustum += 1
+		if not _is_in_frustum(frustum_planes, pos):
+			continue
 
 		# Add to appropriate MultiMesh
 		var unit_type = unit_data.unit_types[i]
 		_add_instance(unit_type, i, pos, unit_data.rotations[i])
 
-	# DEBUG: Print frustum culling stats
-	if Engine.get_frames_drawn() % 60 == 0:
-		print("Render: Checked %d units, %d in frustum" % [units_checked, units_in_frustum])
+	# DEBUG: Print frustum culling stats (disabled - use F3 overlay)
+	# if Engine.get_frames_drawn() % 60 == 0:
+	# 	print("Render: Checked %d units, %d in frustum" % [units_checked, units_in_frustum])
 
 	# Update MultiMesh visible instance counts
 	for unit_type in multimeshes.keys():
@@ -158,9 +164,12 @@ func _add_instance(unit_type: int, unit_idx: int, pos: Vector3, rotation_y: floa
 ## This prevents rendering units that are off-screen
 func _is_in_frustum(frustum_planes: Array[Plane], pos: Vector3) -> bool:
 	# A point is inside the frustum if it's on the correct side of all 6 planes
+	# In Godot, frustum plane normals point INWARD
+	# Positive distance = outside frustum, Negative distance = inside frustum
 	for plane in frustum_planes:
 		# Use a margin of 2.0 to account for unit size
-		if plane.distance_to(pos) < -2.0:
+		# If distance is positive (outside), reject the point
+		if plane.distance_to(pos) > 2.0:
 			return false
 	return true
 

@@ -15,6 +15,9 @@ const MAX_FRAME_SAMPLES: int = 60  # Average over 1 second at 60fps
 # Visibility state
 var overlay_visible: bool = false
 
+# Reference to unit manager for unit stats
+var unit_manager = null
+
 func _ready() -> void:
 	# Create UI hierarchy
 	_create_ui()
@@ -55,6 +58,10 @@ func toggle() -> void:
 	overlay_visible = not overlay_visible
 	visible = overlay_visible
 
+## Set unit manager reference for displaying unit stats
+func set_unit_manager(manager) -> void:
+	unit_manager = manager
+
 func _process(delta: float) -> void:
 	if not overlay_visible:
 		return
@@ -74,24 +81,31 @@ func _process(delta: float) -> void:
 	var fps = Engine.get_frames_per_second()
 	var frame_time_ms = avg_frame_time * 1000.0
 	var draw_calls = Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)
-	var objects_drawn = Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)
 	var vertices_drawn = Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)
 
 	# Get memory usage
 	var static_mem = Performance.get_monitor(Performance.MEMORY_STATIC) / 1024.0 / 1024.0  # MB
 	var static_mem_max = Performance.get_monitor(Performance.MEMORY_STATIC_MAX) / 1024.0 / 1024.0  # MB
 
+	# Get unit counts if unit manager is available
+	var visible_units = 0
+	var total_units = 0
+	if unit_manager:
+		visible_units = unit_manager.get_visible_unit_count()
+		total_units = unit_manager.get_total_unit_count()
+
 	# Update label
 	label.text = """FPS: %d
 Frame Time: %.2f ms
 Draw Calls: %d
-Objects: %d
+Visible Units: %d / %d
 Vertices: %d
 Memory: %.1f / %.1f MB""" % [
 		fps,
 		frame_time_ms,
 		draw_calls,
-		objects_drawn,
+		visible_units,
+		total_units,
 		vertices_drawn,
 		static_mem,
 		static_mem_max
