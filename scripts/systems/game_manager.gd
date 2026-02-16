@@ -7,6 +7,7 @@ extends Node
 # References to major game systems
 var unit_manager: UnitManager
 var resource_manager: ResourceManager
+var debug_overlay: DebugOverlay
 
 # Camera reference
 var camera: Camera3D
@@ -40,6 +41,11 @@ func _initialize_managers() -> void:
 	resource_manager = ResourceManager.new()
 	resource_manager.name = "ResourceManager"
 	add_child(resource_manager)
+
+	# Initialize Debug Overlay (CanvasLayer - needs to be added to root)
+	debug_overlay = DebugOverlay.new()
+	debug_overlay.name = "DebugOverlay"
+	get_tree().root.add_child.call_deferred(debug_overlay)
 
 	# Spawn some test units
 	_spawn_test_units()

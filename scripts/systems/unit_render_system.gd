@@ -40,8 +40,8 @@ func _initialize_multimeshes() -> void:
 		# Create and configure MultiMesh
 		var mm = MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
-		mm.instance_count = 0  # Start with 0, will be set during update
-		mm.visible_instance_count = -1  # All instances visible
+		mm.instance_count = UnitDataSystem.MAX_CAPACITY  # Pre-allocate for all units
+		mm.visible_instance_count = 0  # Start with 0 visible, will be updated
 
 		# TODO: Load actual model meshes based on unit type
 		# For now, use placeholder
@@ -77,10 +77,16 @@ func _create_placeholder_mesh(unit_type: int) -> Mesh:
 ## Only renders units visible to camera (frustum culling)
 func update(camera: Camera3D) -> void:
 	if not unit_data:
+		print("UnitRenderSystem: No unit_data!")
 		return
 
 	# Get camera frustum for culling
 	var frustum_planes = camera.get_frustum()
+
+	# DEBUG: Print camera info once
+	if Engine.get_frames_drawn() == 60:
+		print("Camera pos: ", camera.global_position)
+		print("Frustum planes: ", frustum_planes.size())
 
 	# Reset all mappings
 	for unit_type in multimeshes.keys():
@@ -90,27 +96,37 @@ func update(camera: Camera3D) -> void:
 		mapping.active_count = 0
 
 	# Process each unit
+	var units_checked = 0
+	var units_in_frustum = 0
 	for i in range(unit_data.unit_count):
 		# Skip dead units
 		if unit_data.states[i] == UnitDataSystem.UnitState.DEAD:
 			continue
 
+		units_checked += 1
 		var pos = unit_data.positions[i]
 
 		# FRUSTUM CULLING - Skip off-screen units entirely
 		# This is the KEY optimization for isometric camera
-		if not _is_in_frustum(frustum_planes, pos):
-			continue
+		# TEMPORARILY DISABLED for testing
+		#if not _is_in_frustum(frustum_planes, pos):
+		#	continue
+
+		units_in_frustum += 1
 
 		# Add to appropriate MultiMesh
 		var unit_type = unit_data.unit_types[i]
 		_add_instance(unit_type, i, pos, unit_data.rotations[i])
 
-	# Update MultiMesh instance counts
+	# DEBUG: Print frustum culling stats
+	if Engine.get_frames_drawn() % 60 == 0:
+		print("Render: Checked %d units, %d in frustum" % [units_checked, units_in_frustum])
+
+	# Update MultiMesh visible instance counts
 	for unit_type in multimeshes.keys():
 		var mm: MultiMeshInstance3D = multimeshes[unit_type]
 		var mapping: UnitMapping = mappings[unit_type]
-		mm.multimesh.instance_count = mapping.active_count
+		mm.multimesh.visible_instance_count = mapping.active_count
 
 ## Add an instance to a MultiMesh
 func _add_instance(unit_type: int, unit_idx: int, pos: Vector3, rotation_y: float) -> void:

@@ -34,6 +34,13 @@ ClipboardPoncho uses a **hybrid architecture** that separates rendering from log
 └─────────────────────────────────────────┘
 ```
 
+### Debug Tools
+
+- **DebugOverlay** (`scripts/systems/debug_overlay.gd`): Performance overlay showing real-time metrics
+  - Toggle with **F3** key
+  - Displays: FPS, frame time (ms), draw calls, objects drawn, vertices drawn, memory usage
+  - Useful for performance profiling and optimization
+
 ### Core Systems
 
 The game uses specialized systems coordinated by `GameManager`:
