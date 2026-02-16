@@ -6,12 +6,12 @@ class_name MovementSystem
 ## to avoid collisions with nearby units (using spatial grid).
 
 # Collision avoidance settings
-const AVOIDANCE_RADIUS: float = 2.0  # How close before units try to avoid each other
-const AVOIDANCE_STRENGTH: float = 5.0  # How strongly units push away from each other
-const SEPARATION_DISTANCE: float = 1.5  # Preferred distance between units
+const AVOIDANCE_RADIUS: float = 3.0  # How close before units try to avoid each other
+const AVOIDANCE_STRENGTH: float = 15.0  # How strongly units push away from each other
+const SEPARATION_DISTANCE: float = 2.0  # Preferred distance between units (units are 1m wide)
 
 # Movement smoothing
-const MAX_STEERING_FORCE: float = 10.0  # Maximum steering force per frame
+const MAX_STEERING_FORCE: float = 20.0  # Maximum steering force per frame
 const ARRIVAL_THRESHOLD: float = 0.5  # Distance at which unit "arrives" at target
 
 # References
@@ -23,7 +23,7 @@ func initialize(data: UnitDataSystem, grid: SpatialGrid) -> void:
 	spatial_grid = grid
 
 ## Update all units - apply movement and steering
-func update(delta: float, camera_frustum: Array[Plane]) -> void:
+func update(delta: float, _camera_frustum: Array[Plane]) -> void:
 	if not unit_data or not spatial_grid:
 		return
 
@@ -38,14 +38,16 @@ func update(delta: float, camera_frustum: Array[Plane]) -> void:
 		if not unit_data.is_alive(i):
 			continue
 
-		# Only apply full updates to on-screen units
-		# Off-screen units get simplified movement
-		var is_visible = _is_in_frustum(camera_frustum, unit_data.positions[i])
+		# TEMPORARILY DISABLED: Apply full updates to all units for testing
+		# Once frustum culling is properly tuned, we can re-enable this optimization
+		#var is_visible = _is_in_frustum(camera_frustum, unit_data.positions[i])
+		#if is_visible:
+		#	_update_unit_full(i, delta)
+		#else:
+		#	_update_unit_simple(i, delta)
 
-		if is_visible:
-			_update_unit_full(i, delta)
-		else:
-			_update_unit_simple(i, delta)
+		# For now: all units get full collision avoidance
+		_update_unit_full(i, delta)
 
 ## Full update for on-screen units (collision avoidance, smooth movement)
 func _update_unit_full(unit_idx: int, delta: float) -> void:

@@ -20,6 +20,12 @@ var current_state: GameState = GameState.PLAYING  # Start in PLAYING for testing
 var max_units_per_player: int = 500
 var simulation_speed: float = 1.0
 
+# Test movement settings
+var test_movement_enabled: bool = true
+var movement_area_size: float = 30.0  # All units move within shared 30x30 area at origin
+var move_interval: float = 3.0  # Give new random targets every 3 seconds
+var time_since_last_move: float = 0.0
+
 func _ready() -> void:
 	# Find camera in scene
 	camera = get_viewport().get_camera_3d()
@@ -78,6 +84,10 @@ func _update_game_systems(delta: float) -> void:
 	if unit_manager:
 		unit_manager.update(delta)
 
+	# Test movement behavior - give units random targets periodically
+	if test_movement_enabled and unit_manager:
+		_update_test_movement(delta)
+
 	# Debug output
 	if Engine.get_frames_drawn() % 60 == 0:  # Every second
 		if unit_manager:
@@ -94,3 +104,29 @@ func pause_game() -> void:
 
 func resume_game() -> void:
 	current_state = GameState.PLAYING
+
+## Test behavior: Give units random movement targets
+func _update_test_movement(delta: float) -> void:
+	time_since_last_move += delta
+
+	# Every move_interval seconds, give all units new random targets
+	if time_since_last_move >= move_interval:
+		time_since_last_move = 0.0
+
+		# Get all alive units and give them random targets
+		var unit_data = unit_manager.unit_data
+		var half_size = movement_area_size / 2.0
+
+		for i in range(unit_data.unit_count):
+			if not unit_data.is_alive(i):
+				continue
+
+			# Random position within the movement area (centered at origin)
+			var random_target = Vector3(
+				randf_range(-half_size, half_size),
+				0.0,
+				randf_range(-half_size, half_size)
+			)
+
+			# Command unit to move
+			unit_manager.movement.command_move(i, random_target)
