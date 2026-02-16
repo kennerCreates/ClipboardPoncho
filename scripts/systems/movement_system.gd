@@ -9,7 +9,7 @@ class_name MovementSystem
 const AVOIDANCE_RADIUS: float = 2.5  # How close before units try to avoid each other
 const AVOIDANCE_STRENGTH: float = 20.0  # How strongly units push away from each other
 const SEPARATION_DISTANCE: float = 1.8  # Preferred distance between units (units are 1m wide)
-const MAX_AVOIDANCE_NEIGHBORS: int = 4  # Only avoid N closest units (reduced for performance)
+const MAX_AVOIDANCE_NEIGHBORS: int = 3  # Only avoid N closest units (reduced for performance)
 
 # Movement smoothing
 const MAX_STEERING_FORCE: float = 20.0  # Maximum steering force per frame
@@ -22,8 +22,11 @@ var pathfinding: PathfindingSystem
 
 # Staggered update optimization
 var frame_counter: int = 0
-const UPDATE_BUCKETS_VISIBLE: int = 2  # Update 50% of visible units per frame (smoother)
+const UPDATE_BUCKETS_VISIBLE: int = 4  # Update 25% of visible units per frame (performance)
 const UPDATE_BUCKETS_HIDDEN: int = 10  # Update 10% of off-screen units per frame (more aggressive)
+
+# Spatial grid rebuild optimization
+const SPATIAL_GRID_REBUILD_INTERVAL: int = 2  # Rebuild grid every N frames (stale but fast)
 
 func initialize(data: UnitDataSystem, grid: SpatialGrid, pathfinding_system: PathfindingSystem = null) -> void:
 	unit_data = data
@@ -36,14 +39,15 @@ func update(delta: float, camera_frustum: Array[Plane]) -> void:
 	if not unit_data or not spatial_grid:
 		return
 
-	# Rebuild spatial grid for this frame
-	spatial_grid.clear()
-	for i in range(unit_data.unit_count):
-		if unit_data.is_alive(i):
-			spatial_grid.insert(i, unit_data.positions[i])
-
 	# Increment frame counter for staggered updates
 	frame_counter += 1
+
+	# Rebuild spatial grid periodically (not every frame - saves CPU)
+	if frame_counter % SPATIAL_GRID_REBUILD_INTERVAL == 0:
+		spatial_grid.clear()
+		for i in range(unit_data.unit_count):
+			if unit_data.is_alive(i):
+				spatial_grid.insert(i, unit_data.positions[i])
 
 	# Update each unit with different rates for visible vs off-screen
 	for i in range(unit_data.unit_count):
@@ -55,7 +59,7 @@ func update(delta: float, camera_frustum: Array[Plane]) -> void:
 
 		# Staggered updates: visible units update more frequently (smoother)
 		if is_visible:
-			# Visible units: 50% per frame (every 2 frames)
+			# Visible units: 25% per frame (every 4 frames)
 			if i % UPDATE_BUCKETS_VISIBLE == frame_counter % UPDATE_BUCKETS_VISIBLE:
 				_update_unit_full(i, delta * UPDATE_BUCKETS_VISIBLE)
 		else:
@@ -156,27 +160,41 @@ func _update_unit_simple(unit_idx: int, delta: float) -> void:
 ## Calculate collision avoidance force using spatial grid
 ## Improved: velocity prediction + limited neighbors for performance
 func _calculate_avoidance(unit_idx: int, pos: Vector3) -> Vector3:
-	var avoidance = Vector3.ZERO
-	var velocity = unit_data.velocities[unit_idx]
-
 	# Query nearby units using spatial grid
 	var nearby = spatial_grid.query_radius(pos, AVOIDANCE_RADIUS)
 
+	# Early exit if no nearby units (common case - saves computation)
+	if nearby.size() <= 1:  # Only self or nobody
+		return Vector3.ZERO
+
+	var avoidance = Vector3.ZERO
+	var velocity = unit_data.velocities[unit_idx]
+
 	# Build list of neighbors with distances for sorting
+	# Use squared distances to avoid expensive sqrt()
+	const SEPARATION_DISTANCE_SQ = SEPARATION_DISTANCE * SEPARATION_DISTANCE
 	var neighbors = []
 	for other_idx in nearby:
 		if other_idx == unit_idx or not unit_data.is_alive(other_idx):
 			continue
 
 		var other_pos = unit_data.positions[other_idx]
-		var distance = pos.distance_to(other_pos)
+		var distance_sq = pos.distance_squared_to(other_pos)
 
-		if distance < SEPARATION_DISTANCE and distance > 0.01:
+		if distance_sq < SEPARATION_DISTANCE_SQ and distance_sq > 0.0001:
+			# Store actual distance only when we need it (for sorting/calculations)
+			var distance = sqrt(distance_sq)
 			neighbors.append({"idx": other_idx, "pos": other_pos, "distance": distance})
 
-	# Sort by distance and limit to closest N neighbors
-	neighbors.sort_custom(func(a, b): return a.distance < b.distance)
+	# Early exit if no close neighbors
+	if neighbors.is_empty():
+		return Vector3.ZERO
+
+	# Skip sorting if we have few neighbors (performance optimization)
 	var max_neighbors = min(neighbors.size(), MAX_AVOIDANCE_NEIGHBORS)
+	if neighbors.size() > MAX_AVOIDANCE_NEIGHBORS:
+		# Only sort if we have more neighbors than we need
+		neighbors.sort_custom(func(a, b): return a.distance < b.distance)
 
 	# Apply avoidance from closest neighbors only
 	for i in range(max_neighbors):
