@@ -14,74 +14,149 @@ ClipboardPoncho is a sci-fi/fantasy RTS game in Godot 4.6, inspired by StarCraft
 
 ## Architecture
 
-### Core Systems (Manager Pattern)
+### Hybrid Data-Oriented Design (NEW!)
 
-The game uses a centralized manager pattern for major systems, coordinated by `GameManager`:
+ClipboardPoncho uses a **hybrid architecture** that separates rendering from logic for maximum performance with 500+ units per side:
 
-1. **UnitManager** (`scripts/systems/unit_manager.gd`)
-   - Tracks all units across all players
-   - Implements spatial partitioning for performance (TODO: octree/grid)
-   - Handles unit selection and LOD (Level of Detail)
-   - Signal-based communication: `unit_created`, `unit_destroyed`
+```
+┌─────────────────────────────────────────┐
+│  RENDERING LAYER (MultiMesh)            │
+│  • 3 draw calls total (one per type)   │
+│  • Frustum culling (only on-screen)    │
+│  • 200-300 units rendered               │
+└─────────────────────────────────────────┘
+              ↕
+┌─────────────────────────────────────────┐
+│  LOGIC LAYER (Data-Oriented)            │
+│  • Packed arrays (cache-friendly)      │
+│  • ~240 bytes per unit                  │
+│  • Spatial grid for queries             │
+└─────────────────────────────────────────┘
+```
 
-2. **ResourceManager** (`scripts/systems/resource_manager.gd`)
+### Core Systems
+
+The game uses specialized systems coordinated by `GameManager`:
+
+1. **UnitDataSystem** (`scripts/systems/unit_data_system.gd`) - **NEW!**
+   - Stores ALL unit data in packed arrays (Structure of Arrays pattern)
+   - One unit = one index across all parallel arrays
+   - No Node3D overhead - just raw data
+   - ~240 bytes per unit vs 2KB+ for traditional Node3D approach
+   - Supports: positions, velocities, health, states, targets, etc.
+
+2. **UnitRenderSystem** (`scripts/systems/unit_render_system.gd`) - **NEW!**
+   - Renders units using MultiMesh (one per unit type)
+   - **Frustum culling**: Only renders on-screen units (200-300 of 1000)
+   - 3 draw calls total vs 300+ individual draw calls
+   - Updates instance transforms from UnitDataSystem each frame
+   - LOD based on camera zoom can be added later
+
+3. **MovementSystem** (`scripts/systems/movement_system.gd`) - **NEW!**
+   - Updates unit positions and velocities
+   - Collision avoidance using spatial grid
+   - Simplified updates for off-screen units
+   - Steering behaviors (separation, arrival)
+
+4. **SpatialGrid** (`scripts/utils/spatial_grid.gd`) - **NEW!**
+   - Grid-based spatial hashing for fast queries
+   - O(1) insertion, O(k) queries where k = nearby units
+   - Essential for collision avoidance with 1000 units
+   - Example: Instead of checking 1000 units, only check ~20-30 nearby
+
+5. **UnitManager** (`scripts/systems/unit_manager.gd`) - **UPDATED!**
+   - Coordinates all unit systems
+   - Maintains signal compatibility with existing code
+   - Returns unit indices instead of Node3D references
+   - Provides high-level commands (spawn, move, attack)
+
+6. **ResourceManager** (`scripts/systems/resource_manager.gd`)
    - Manages player resources (minerals, vespene, supply)
    - Tracks worker assignments to resource nodes
    - Validates affordability for purchases
    - Signal-based: `resources_changed`, `supply_changed`
 
-3. **PathfindingManager** (TODO)
+7. **PathfindingManager** (TODO - Coming Soon)
+   - Flow field pathfinding for large unit groups
    - Centralized pathfinding to avoid duplicate calculations
-   - Flow field pathfinding for large unit groups (recommended for RTS)
-   - Unit collision avoidance (steering behaviors)
+   - Local collision avoidance (already implemented in MovementSystem)
 
-4. **AIManager** (TODO)
+8. **AIManager** (TODO)
    - AI opponent decision making
    - Build orders, attack timing, micro management
    - Difficulty scaling
 
 ### Performance Considerations
 
-**Critical for 500+ units per side:**
+**Key optimizations for 1000 total units (500 per side):**
 
-- **LOD System**: Units farther from camera use simplified models/animations
-  - Close: Full detail
-  - Medium (30m+): Reduced polygon count, simplified animations
-  - Far (60m+): Billboards or very low poly
+- **Frustum Culling** (CRITICAL):
+  - Like StarCraft 2, camera only sees portion of battlefield
+  - Only 200-300 units on-screen at once (not all 1000)
+  - Off-screen units skip: rendering, LOD checks, visual updates
+  - Off-screen units still run: AI, pathfinding (at reduced rate), combat
+  - **Result**: Effectively rendering 300 units, not 1000
 
-- **Spatial Partitioning**: Use octree or grid-based partitioning for:
-  - Unit queries (find units in area)
-  - Vision/fog of war
-  - Collision detection
+- **MultiMesh Rendering**:
+  - 3 draw calls total (one per unit type) vs 300+ individual draw calls
+  - GPU instancing handles all transform updates
+  - Massive rendering performance boost
 
-- **Object Pooling**: Reuse nodes for:
-  - Projectiles (bullets, missiles)
-  - VFX (explosions, effects)
-  - Frequently spawned/destroyed units
+- **Data-Oriented Design**:
+  - Packed arrays for cache-friendly sequential access
+  - ~240 bytes per unit vs 2KB+ for Node3D
+  - All unit data in contiguous memory
 
-- **Batching**: Group similar units for rendering efficiency
-  - Use MultiMeshInstance3D for units with same model
+- **Spatial Grid**:
+  - Grid-based hashing for O(1) insertion, O(k) queries
+  - Collision avoidance checks only ~20-30 nearby units, not all 1000
+  - Example: 1000 × 20 = 20,000 checks vs 1000 × 1000 = 1,000,000
 
-- **Update Optimization**: Not all units need _process() every frame
-  - Stagger updates across multiple frames
-  - Distant units update less frequently
+- **Staggered Updates** (TODO in BehaviorSystem):
+  - Update 25% of units per frame (250 units @ 60fps)
+  - Each unit updates every 4 frames (66ms latency)
+  - Player won't notice; keeps 60fps stable
 
-### Scene Structure
+- **LOD System** (Future - camera zoom based):
+  - With isometric camera, distance-based LOD doesn't make sense
+  - Instead: LOD based on camera zoom level
+  - Zoomed out = simplified models, zoomed in = full detail
 
-**Unit Architecture:**
+### Data Structures
+
+**Unit Data (Structure of Arrays):**
+```gdscript
+# In UnitDataSystem - all arrays share same index = same unit
+var positions: PackedVector3Array
+var velocities: PackedVector3Array
+var rotations: PackedFloat32Array
+var health: PackedFloat32Array
+var max_health: PackedFloat32Array
+var unit_types: PackedInt32Array  # WORKER, MARINE, TANK
+var player_ids: PackedInt32Array
+var states: PackedInt32Array  # IDLE, MOVING, ATTACKING, etc.
+var target_positions: PackedVector3Array
+var target_unit_ids: PackedInt32Array
+
+# Example: Unit at index 42
+# positions[42] = Vector3(10, 0, 15)
+# health[42] = 75.0
+# unit_types[42] = UnitType.MARINE
+# states[42] = UnitState.ATTACKING
 ```
-Unit (Node3D)
-├── Model (MeshInstance3D or Scene)
-├── SelectionDecal (Decal)
-├── HealthBar (Node3D → UI)
-├── CollisionShape3D
-├── NavigationAgent3D
-└── Scripts:
-    ├── unit.gd (base unit behavior)
-    └── unit_type.gd (specific unit: marine, zealot, etc.)
+
+**Spatial Grid:**
+```gdscript
+# Fast spatial queries - no more checking all 1000 units!
+var grid: Dictionary = {}  # Vector2i(cell_x, cell_z) -> Array[unit_index]
+
+# Query only nearby units
+var nearby = spatial_grid.query_radius(position, 5.0)  # Returns ~20-30 units
+for unit_idx in nearby:
+    check_collision(unit_idx)
 ```
 
-**Building Architecture:**
+**Building Architecture** (TODO - still using traditional nodes for now):
 ```
 Building (Node3D)
 ├── Model (MeshInstance3D)
