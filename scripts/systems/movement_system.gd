@@ -11,14 +11,15 @@ const AVOIDANCE_STRENGTH: float = 20.0  # How strongly units push away from each
 const SEPARATION_DISTANCE: float = 1.8  # Preferred distance between units (units are 1m wide)
 const MAX_AVOIDANCE_NEIGHBORS: int = 3  # Only avoid N closest units (reduced for performance)
 
-# Movement smoothing
+# Movement smoothing (Phase 1: Research-based improvements)
 const MAX_STEERING_FORCE: float = 20.0  # Maximum steering force per frame
-const ARRIVAL_THRESHOLD: float = 0.5  # Distance at which unit "arrives" at target
+const ARRIVAL_THRESHOLD: float = 2.5  # Distance at which unit "arrives" at target (was 0.5m)
 
 # References
 var unit_data: UnitDataSystem
 var spatial_grid: SpatialGrid
 var pathfinding: PathfindingSystem
+var route_following: RouteFollowingSystem
 
 # Staggered update optimization
 var frame_counter: int = 0
@@ -28,10 +29,11 @@ const UPDATE_BUCKETS_HIDDEN: int = 10  # Update 10% of off-screen units per fram
 # Spatial grid rebuild optimization
 const SPATIAL_GRID_REBUILD_INTERVAL: int = 2  # Rebuild grid every N frames (stale but fast)
 
-func initialize(data: UnitDataSystem, grid: SpatialGrid, pathfinding_system: PathfindingSystem = null) -> void:
+func initialize(data: UnitDataSystem, grid: SpatialGrid, pathfinding_system: PathfindingSystem = null, route_following_system: RouteFollowingSystem = null) -> void:
 	unit_data = data
 	spatial_grid = grid
 	pathfinding = pathfinding_system
+	route_following = route_following_system
 
 ## Update all units - apply movement and steering
 ## Uses staggered updates: only 25% of units updated per frame
@@ -84,32 +86,56 @@ func _update_unit_full(unit_idx: int, delta: float) -> void:
 	var to_target = target - pos
 	var distance_to_target = to_target.length()
 
-	# Check if arrived
+	# Check if arrived (Phase 2: Synchronized stopping)
 	if distance_to_target < ARRIVAL_THRESHOLD:
 		unit_data.states[unit_idx] = UnitDataSystem.UnitState.IDLE
 		unit_data.velocities[unit_idx] = Vector3.ZERO
+
+		# StarCraft 2 technique: Synchronized stop - when one unit arrives,
+		# stop nearby units that are also close to their targets
+		var nearby = spatial_grid.query_radius(pos, SEPARATION_DISTANCE * 2.0)
+		for neighbor_idx in nearby:
+			if neighbor_idx == unit_idx:
+				continue
+
+			# Only affect units that are moving
+			if unit_data.states[neighbor_idx] != UnitDataSystem.UnitState.MOVING:
+				continue
+
+			# Check if neighbor is also close to its target
+			var neighbor_target = unit_data.target_positions[neighbor_idx]
+			var neighbor_pos = unit_data.positions[neighbor_idx]
+			var neighbor_dist = neighbor_pos.distance_to(neighbor_target)
+
+			# If within 1.5x threshold, stop it too (creates synchronized group stop)
+			if neighbor_dist < ARRIVAL_THRESHOLD * 1.5:
+				unit_data.states[neighbor_idx] = UnitDataSystem.UnitState.IDLE
+				unit_data.velocities[neighbor_idx] = Vector3.ZERO
+
 		return
 
-	# Calculate desired velocity using direct path (flow fields temporarily disabled)
-	var speed = unit_data.get_unit_speed(unit_idx)
-	var desired_velocity = to_target.normalized() * speed
+	# LEVEL 3: Route Following - Get preferred velocity from flow fields
+	var preferred_velocity = Vector3.ZERO
+	if route_following:
+		preferred_velocity = route_following.calculate_preferred_velocity(unit_idx)
+	else:
+		# Fallback if route_following not available
+		var speed = unit_data.get_unit_speed(unit_idx)
+		preferred_velocity = to_target.normalized() * speed
 
-	# TODO: Re-enable flow fields after performance testing
-	# if pathfinding and pathfinding.is_in_bounds(pos):
-	# 	var flow_direction = pathfinding.get_flow_direction(pos, target)
-	# 	if flow_direction.length_squared() > 0.01:
-	# 		desired_velocity = flow_direction.normalized() * speed
-
-	# Apply collision avoidance
+	# LEVEL 2: Local Movement - Apply collision avoidance
 	var avoidance_force = _calculate_avoidance(unit_idx, pos)
 
-	# Combine forces
-	var steering = desired_velocity + avoidance_force - velocity
+	# Combine Level 3 (preferred velocity) with Level 2 (avoidance)
+	var steering = preferred_velocity + avoidance_force - velocity
 	steering = steering.limit_length(MAX_STEERING_FORCE)
 
-	# Apply steering
+	# Apply steering to get actual velocity
 	velocity += steering * delta
-	velocity = velocity.limit_length(speed)
+
+	# Limit to unit's max speed
+	var max_speed = unit_data.get_unit_speed(unit_idx)
+	velocity = velocity.limit_length(max_speed)
 
 	# Update data
 	unit_data.velocities[unit_idx] = velocity

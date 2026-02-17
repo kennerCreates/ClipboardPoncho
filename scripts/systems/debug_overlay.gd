@@ -17,6 +17,7 @@ var overlay_visible: bool = false
 
 # Reference to unit manager for unit stats
 var unit_manager = null
+var pathfinding_system = null
 
 func _ready() -> void:
 	# Create UI hierarchy
@@ -62,6 +63,10 @@ func toggle() -> void:
 func set_unit_manager(manager) -> void:
 	unit_manager = manager
 
+## Set pathfinding system reference for displaying flow field stats
+func set_pathfinding_system(pf_system) -> void:
+	pathfinding_system = pf_system
+
 func _process(delta: float) -> void:
 	if not overlay_visible:
 		return
@@ -94,11 +99,17 @@ func _process(delta: float) -> void:
 		visible_units = unit_manager.get_visible_unit_count()
 		total_units = unit_manager.get_total_unit_count()
 
+	# Get flow field count if pathfinding available
+	var active_flow_fields = 0
+	if pathfinding_system:
+		active_flow_fields = pathfinding_system.get_active_field_count()
+
 	# Update label
 	label.text = """FPS: %d
 Frame Time: %.2f ms
 Draw Calls: %d
 Visible Units: %d / %d
+Flow Fields: %d
 Vertices: %d
 Memory: %.1f / %.1f MB""" % [
 		fps,
@@ -106,6 +117,7 @@ Memory: %.1f / %.1f MB""" % [
 		draw_calls,
 		visible_units,
 		total_units,
+		active_flow_fields,
 		vertices_drawn,
 		static_mem,
 		static_mem_max

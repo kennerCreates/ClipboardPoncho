@@ -17,6 +17,8 @@ var unit_render: UnitRenderSystem
 var movement: MovementSystem
 var spatial_grid: SpatialGrid
 var pathfinding: PathfindingSystem
+var route_following: RouteFollowingSystem
+var formation_manager: FormationManager
 
 # Unit tracking by player
 var units_by_player: Dictionary = {}  # player_id -> Array[int] (unit indices)
@@ -43,9 +45,17 @@ func _ready() -> void:
 	pathfinding = PathfindingSystem.new()
 	add_child(pathfinding)
 
+	route_following = RouteFollowingSystem.new()
+	add_child(route_following)
+	route_following.initialize(unit_data, pathfinding)
+
+	formation_manager = FormationManager.new()
+	add_child(formation_manager)
+	formation_manager.initialize(unit_data)
+
 	movement = MovementSystem.new()
 	add_child(movement)
-	movement.initialize(unit_data, spatial_grid, pathfinding)
+	movement.initialize(unit_data, spatial_grid, pathfinding, route_following)
 
 	# Initialize player tracking
 	units_by_player[0] = []  # Player 1
@@ -79,9 +89,14 @@ func get_player_unit_count(player_id: int) -> int:
 func can_spawn_unit(player_id: int) -> bool:
 	return get_player_unit_count(player_id) < MAX_UNITS_PER_PLAYER
 
-## Command units to move
+## Command units to move (Phase 2: Formation-based movement)
 func command_move(unit_indices: Array[int], target_pos: Vector3) -> void:
-	movement.command_move_group(unit_indices, target_pos)
+	# Use formation manager to assign offset positions
+	var formation_positions = formation_manager.assign_formation_positions(unit_indices, target_pos)
+
+	# Command each unit to its assigned formation position
+	for unit_idx in formation_positions:
+		movement.command_move(unit_idx, formation_positions[unit_idx])
 
 ## Update all systems (called from GameManager)
 func update(delta: float) -> void:
